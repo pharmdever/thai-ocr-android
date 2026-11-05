@@ -14,7 +14,7 @@ import android.os.ParcelFileDescriptor;
 import android.text.InputType;
 import android.view.View;
 import android.widget.*;
-import cz.adaptech.tesseract4android.TessBaseAPI;
+import com.googlecode.tesseract.android.TessBaseAPI;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
