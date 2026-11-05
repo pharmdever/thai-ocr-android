@@ -25,13 +25,14 @@ public final class OcrImagePreparation {
         }
         boolean dark = darkPixels > samples * .6;
         int[] histogram = new int[256];
-        for (int y = 0; y < height; y += step) {
+        for (int y = 0; y < height; y++) {
             source.getPixels(row, 0, width, 0, y, width, 1);
-            for (int x = 0; x < width; x += step) histogram[PixelPreparation.inkValue(row[x], dark)]++;
+            for (int x = 0; x < width; x++) histogram[PixelPreparation.inkValue(row[x], dark)]++;
         }
-        int low = PixelPreparation.percentile(histogram, samples, .01);
-        int high = PixelPreparation.percentile(histogram, samples, .99);
-        int border = Math.max(12, Math.min(width, height) / 50);
+        // Full-image statistics avoid losing thin colored strokes between sampled pixels.
+        int low = PixelPreparation.percentile(histogram, width * height, .01);
+        int high = PixelPreparation.percentile(histogram, width * height, .99);
+        int border = 24;
         Bitmap result = Bitmap.createBitmap(width + border * 2, height + border * 2, Bitmap.Config.ARGB_8888);
         result.eraseColor(Color.WHITE);
         for (int y = 0; y < height; y++) {
