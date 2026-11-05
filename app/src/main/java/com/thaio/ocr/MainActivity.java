@@ -331,6 +331,7 @@ public class MainActivity extends Activity {
         final Rect bounds;
         final String original;
         final float confidence;
+        final List<Rect> slashBoxes = new ArrayList<>();
         TextLine(Rect bounds, String original, float confidence) {
             this.bounds = bounds; this.original = original; this.confidence = confidence;
         }
@@ -350,6 +351,24 @@ public class MainActivity extends Activity {
                 } while (iterator.next(PageIteratorLevel.RIL_TEXTLINE));
             } finally { iterator.delete(); }
         }
+        iterator = engine.getResultIterator();
+        if (iterator != null) {
+            try {
+                iterator.begin();
+                do {
+                    String word = iterator.getUTF8Text(PageIteratorLevel.RIL_WORD);
+                    if (word == null || !word.trim().equals("/")) continue;
+                    Rect box = iterator.getBoundingRect(PageIteratorLevel.RIL_WORD);
+                    if (box == null) continue;
+                    for (TextLine line : lines) {
+                        if (line.bounds.contains(box.centerX(), box.centerY())
+                            && Pattern.compile("(^|\\s)/(\\s|$)").matcher(line.original).find()) {
+                            line.slashBoxes.add(new Rect(box)); break;
+                        }
+                    }
+                } while (iterator.next(PageIteratorLevel.RIL_WORD));
+            } finally { iterator.delete(); }
+        }
         if (lines.isEmpty()) lines.add(new TextLine(new Rect(0, 0, image.getWidth(), image.getHeight()), fallback, 0));
         SpannableStringBuilder result = new SpannableStringBuilder();
         for (int i = 0; i < lines.size(); i++) {
@@ -358,6 +377,9 @@ public class MainActivity extends Activity {
             TextLine line = lines.get(i);
             CtcDecoder.Text prediction = printed.read(image, line.bounds);
             String text = PrintedTextFusion.merge(line.original, prediction.text, line.confidence);
+            boolean[] slashEvidence = new boolean[line.slashBoxes.size()];
+            for (int j = 0; j < slashEvidence.length; j++) slashEvidence[j] = visuallyForwardSlash(image, line.slashBoxes.get(j));
+            text = SlashReview.repair(line.original, text, slashEvidence);
             SpannableString marked = new SpannableString(text);
             // Model scores indicate uncertainty, not the probability that the full line is correct.
             if (prediction.confidence < .90f || prediction.text.trim().isEmpty()) {
@@ -374,6 +396,16 @@ public class MainActivity extends Activity {
             recognizedCharacters += text.trim().length();
         }
         return result;
+    }
+
+    private boolean visuallyForwardSlash(Bitmap image, Rect box) {
+        Rect clipped = new Rect(box);
+        if (!clipped.intersect(0, 0, image.getWidth(), image.getHeight()) || clipped.width() < 2 || clipped.height() < 6) return false;
+        // Punctuation should be small; reject unexpected large regions instead of classifying them.
+        if ((long)clipped.width() * clipped.height() > 100000) return false;
+        int[] pixels = new int[clipped.width() * clipped.height()];
+        image.getPixels(pixels, 0, clipped.width(), clipped.left, clipped.top, clipped.width(), clipped.height());
+        return SlashReview.isForwardSlash(pixels, clipped.width(), clipped.height());
     }
 
     private void showPreview(Bitmap source) {
