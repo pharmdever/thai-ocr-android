@@ -1,6 +1,15 @@
 name: Build signed release APK
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'scripts/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/release.yml'
 permissions:
   contents: read
 concurrency:
