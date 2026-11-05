@@ -18,6 +18,12 @@ public final class PrintedRecognitionCheck {
         check(PrintedTextFusion.merge("Label 7ทาย", "Label 7ml", 95).equals("Label 7ml"), "A unit recognized as Thai must not be restored");
         check(PrintedTextFusion.merge("ข้อความ 2 units", "ขอความ 2 units", 95).equals("ข้อความ 2 units"), "Keep reliable Thai when script groups agree");
         check(PrintedTextFusion.merge("ผิด", "ถูก", 50).equals("ถูก"), "Low confidence source must not override the printed model");
-        System.out.println("8 printed recognition checks passed.");
+        check(PrintedTextFusion.merge("เรมทดสอบ F", "เริ่มทดสอบ F", 95).equals("เริ่มทดสอบ F"), "An old confident result must not erase recovered vowels and tones");
+        check(PrintedTextFusion.merge("โทรศัพย์ 123", "โทรศัพท์ 123", 95).equals("โทรศัพท์ 123"), "An old consonant error must not overwrite the new reading");
+        check(PrintedTextFusion.merge("ขนาด 7ทาย", "ขuาด 7ml", 95).equals("ขนาด 7ml"), "Repair a Latin intrusion inside a Thai word without restoring a bad unit");
+        check(PrintedTextFusion.merge("ยานอนหลับ 2 units", "ยนอนหลับ 2 units", 95).equals("ยานอนหลับ 2 units"), "Keep a reliably read Thai character omitted by the new engine");
+        check(PrintedTextFusion.merge("เอกสารจําลอง", "เอกสารจำลอง", 95).equals("เอกสารจำลอง"), "Equivalent Thai am representations must not bias character count");
+        check(PrintedTextFusion.merge("ข้อความ 123-4 56", "ข้อความ 123-456", 95).equals("ข้อความ 123-456"), "Thai merging must not change correctly read numeric punctuation");
+        System.out.println("14 printed recognition checks passed.");
     }
 }
