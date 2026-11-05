@@ -1,0 +1,6 @@
+Thai printed-text recognition: PaddlePaddle th_PP-OCRv5_mobile_rec_onnx
+Source: https://huggingface.co/PaddlePaddle/th_PP-OCRv5_mobile_rec_onnx
+Revision: 1d4adbbafb1034a2fd6618498575b81ea7b69f69
+License: Apache-2.0. See bundled LICENSE.
+The character alphabet is derived from the model's inference.yml.
+Model inference runs locally using ONNX Runtime (MIT License).

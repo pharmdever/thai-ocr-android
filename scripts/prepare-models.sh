@@ -12,3 +12,8 @@ for model in fast best; do
   done
   curl --fail --location --retry 3 "https://raw.githubusercontent.com/tesseract-ocr/tessdata_${model}/4.1.0/LICENSE" -o "${directory}/LICENSE"
 done
+mkdir -p app/src/main/assets/printed
+curl --fail --location --retry 3 'https://huggingface.co/PaddlePaddle/th_PP-OCRv5_mobile_rec_onnx/resolve/1d4adbbafb1034a2fd6618498575b81ea7b69f69/inference.onnx' -o app/src/main/assets/printed/inference.onnx.tmp
+printf '%s\n' '27618be66018f8598ac0a526a593f9f1cebf794e7eded93428e8fb016e537f5f  app/src/main/assets/printed/inference.onnx.tmp' | sha256sum --check -
+mv app/src/main/assets/printed/inference.onnx.tmp app/src/main/assets/printed/inference.onnx
+cp app/src/main/assets/models/fast/tessdata/LICENSE app/src/main/assets/printed/LICENSE

@@ -31,4 +31,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
-dependencies { implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0' }
+dependencies {
+    implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.2'
+}

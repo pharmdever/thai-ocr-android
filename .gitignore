@@ -10,4 +10,6 @@ local.properties
 keystore-password.txt
 app/src/main/assets/tessdata/*.traineddata
 app/src/main/assets/models/**/*.traineddata
+app/src/main/assets/printed/*.onnx
+app/src/main/assets/printed/*.tmp
 *.zip

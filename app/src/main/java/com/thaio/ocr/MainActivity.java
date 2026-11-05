@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
 import android.os.Bundle;
@@ -27,6 +28,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -69,7 +72,7 @@ public class MainActivity extends Activity {
         TextView subtitle = new TextView(this);
         subtitle.setText("แปลงภาพและ PDF เป็นข้อความ\nภาษาไทย + English • ใช้งานออฟไลน์");
         subtitle.setTextSize(16); body.addView(subtitle);
-        detailed = new CheckBox(this); detailed.setText("อ่านละเอียด (ช้ากว่า แต่ใช้ชุดภาษาคุณภาพสูง)");
+        detailed = new CheckBox(this); detailed.setText("โหมดข้อความพิมพ์ (แนะนำสำหรับไทย + English)");
         detailed.setChecked(true); body.addView(detailed);
         enhance = new CheckBox(this); enhance.setText("ปรับภาพอัตโนมัติ รวมถึงภาพพื้นดำ / ตัวอักษรสี");
         enhance.setChecked(true); body.addView(enhance);
@@ -189,6 +192,7 @@ public class MainActivity extends Activity {
 
     private void recognize(Uri uri, boolean quality, boolean prepare, String langs, int pageMode) {
         TessBaseAPI engine = new TessBaseAPI();
+        PrintedTextRecognizer printed = null;
         File temp = null;
         try {
             uncertainWords = 0; recognizedCharacters = 0;
@@ -196,6 +200,10 @@ public class MainActivity extends Activity {
             if (!engine.init(modelRoot.getAbsolutePath(), langs, TessBaseAPI.OEM_LSTM_ONLY))
                 throw new IOException("เปิดระบบ OCR ไม่สำเร็จ");
             engine.setPageSegMode(pageMode);
+            if (quality && langs.equals("tha+eng")) {
+                updateStatus("กำลังเตรียมระบบอ่านข้อความพิมพ์…");
+                printed = new PrintedTextRecognizer(this);
+            }
             temp = File.createTempFile("document-", ".bin", getCacheDir());
             try (InputStream input = getContentResolver().openInputStream(uri);
                  OutputStream file = new FileOutputStream(temp)) {
@@ -229,7 +237,7 @@ public class MainActivity extends Activity {
                             try {
                                 bitmap.eraseColor(Color.WHITE);
                                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                                text.append("--- หน้า ").append(String.valueOf(i + 1)).append(" ---\n").append(read(engine, bitmap, prepare)).append("\n\n");
+                                text.append("--- หน้า ").append(String.valueOf(i + 1)).append(" ---\n").append(read(engine, bitmap, prepare, printed)).append("\n\n");
                             } finally { bitmap.recycle(); }
                         }
                     }
@@ -246,7 +254,7 @@ public class MainActivity extends Activity {
                 if (bitmap == null) throw new IOException("อ่านรูปไม่ได้");
                 Bitmap oriented = OcrImagePreparation.orient(bitmap, temp);
                 if (oriented != bitmap) bitmap.recycle();
-                try { text.append(read(engine, oriented, prepare)); } finally { oriented.recycle(); }
+                try { text.append(read(engine, oriented, prepare, printed)); } finally { oriented.recycle(); }
             }
             CharSequence result = text;
             runOnUiThread(() -> {
@@ -257,8 +265,11 @@ public class MainActivity extends Activity {
             });
         } catch (Exception | OutOfMemoryError e) {
             updateStatus("อ่านไม่สำเร็จ: " + (e instanceof OutOfMemoryError ? "หน่วยความจำไม่พอ ลองไฟล์เล็กลง" :
-                "โปรดใช้ JPG, PNG หรือ PDF ไม่ล็อกรหัสผ่าน ขนาดไม่เกิน 50 MB / 30 หน้า"));
+                "ลองไฟล์ JPG, PNG หรือ PDF ไม่ล็อกรหัสผ่าน หากเครื่องไม่รองรับให้ปิดโหมดข้อความพิมพ์แล้วอ่านซ้ำ"));
         } finally {
+            if (printed != null) {
+                try { printed.close(); } catch (Exception ignored) { }
+            }
             engine.recycle();
             if (temp != null) temp.delete();
             runOnUiThread(() -> {
@@ -273,7 +284,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private CharSequence read(TessBaseAPI engine, Bitmap bitmap, boolean prepare) {
+    private CharSequence read(TessBaseAPI engine, Bitmap bitmap, boolean prepare, PrintedTextRecognizer printed) throws Exception {
         if (closed) return "";
         showPreview(bitmap);
         Bitmap processed = prepare ? OcrImagePreparation.prepare(bitmap) : bitmap;
@@ -281,6 +292,7 @@ public class MainActivity extends Activity {
             engine.setImage(processed);
             String text = engine.getUTF8Text();
             if (text == null) text = "";
+            if (printed != null) return readPrinted(engine, processed, printed, text);
             recognizedCharacters += text.trim().length();
             SpannableString marked = new SpannableString(text);
             ResultIterator iterator = engine.getResultIterator();
@@ -313,6 +325,55 @@ public class MainActivity extends Activity {
             engine.clear();
             if (processed != bitmap) processed.recycle();
         }
+    }
+
+    private static final class TextLine {
+        final Rect bounds;
+        final String original;
+        final float confidence;
+        TextLine(Rect bounds, String original, float confidence) {
+            this.bounds = bounds; this.original = original; this.confidence = confidence;
+        }
+    }
+
+    private CharSequence readPrinted(TessBaseAPI engine, Bitmap image, PrintedTextRecognizer printed, String fallback) throws Exception {
+        List<TextLine> lines = new ArrayList<>();
+        ResultIterator iterator = engine.getResultIterator();
+        if (iterator != null) {
+            try {
+                iterator.begin();
+                do {
+                    String original = iterator.getUTF8Text(PageIteratorLevel.RIL_TEXTLINE);
+                    Rect box = iterator.getBoundingRect(PageIteratorLevel.RIL_TEXTLINE);
+                    if (original == null || original.trim().isEmpty() || box == null || box.width() < 3 || box.height() < 4) continue;
+                    lines.add(new TextLine(new Rect(box), original.trim(), iterator.confidence(PageIteratorLevel.RIL_TEXTLINE)));
+                } while (iterator.next(PageIteratorLevel.RIL_TEXTLINE));
+            } finally { iterator.delete(); }
+        }
+        if (lines.isEmpty()) lines.add(new TextLine(new Rect(0, 0, image.getWidth(), image.getHeight()), fallback, 0));
+        SpannableStringBuilder result = new SpannableStringBuilder();
+        for (int i = 0; i < lines.size(); i++) {
+            if (closed) break;
+            updateStatus("กำลังอ่านข้อความพิมพ์ บรรทัด " + (i + 1) + " / " + lines.size());
+            TextLine line = lines.get(i);
+            CtcDecoder.Text prediction = printed.read(image, line.bounds);
+            String text = PrintedTextFusion.merge(line.original, prediction.text, line.confidence);
+            SpannableString marked = new SpannableString(text);
+            // Model scores indicate uncertainty, not the probability that the full line is correct.
+            if (prediction.confidence < .90f || prediction.text.trim().isEmpty()) {
+                marked.setSpan(new BackgroundColorSpan(0xffffe59a), 0, marked.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                uncertainWords++;
+            }
+            Matcher suspicious = Pattern.compile("[0-9]+[\\u0E00-\\u0E7F]+|[0-9]+(?:-[0-9]+)+[ \\t]+[0-9]+(?:-[0-9]+)*").matcher(text);
+            while (suspicious.find()) {
+                marked.setSpan(new BackgroundColorSpan(0xffffe59a), suspicious.start(), suspicious.end(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                uncertainWords++;
+            }
+            if (result.length() > 0) result.append("\n");
+            result.append(marked);
+            recognizedCharacters += text.trim().length();
+        }
+        return result;
     }
 
     private void showPreview(Bitmap source) {
