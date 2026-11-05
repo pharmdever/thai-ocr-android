@@ -3,5 +3,10 @@
 local.properties
 *.jks
 *.keystore
+*.p12
+*.pfx
+*signing-backup*
+*KEYSTORE*.txt
+keystore-password.txt
 app/src/main/assets/tessdata/*.traineddata
 *.zip

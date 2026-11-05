@@ -1,0 +1,67 @@
+name: Build signed release APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-signed-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo 'Add ANDROID_KEYSTORE_BASE64 in repository Actions secrets.'; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo 'Add ANDROID_KEYSTORE_PASSWORD in repository Actions secrets.'; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/thai-ocr-release.p12"
+          echo "APP_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "APP_VERSION_NAME=0.2.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/thai-ocr-release.p12" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Bundle offline language models
+        run: bash scripts/prepare-models.sh
+      - name: Build signed release and check
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon assembleRelease lintRelease
+      - name: Verify signing certificate and APK version
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > "$RUNNER_TEMP/apk-certificate.txt"
+          cat "$RUNNER_TEMP/apk-certificate.txt"
+          expected=65f664bca0eb27de45c7e1722676aed58029e3bec6dad265d6d079b29ba3668a
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-certificate.txt")
+          test "$actual" = "$expected" || { echo 'Signing certificate does not match the permanent app key.'; exit 1; }
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
+          head -n 1 "$RUNNER_TEMP/apk-badging.txt"
+          mkdir -p release-output
+          cp "$apk" "release-output/thai-ocr-${APP_VERSION_NAME}.apk"
+          cp "$RUNNER_TEMP/apk-certificate.txt" release-output/signing-certificate.txt
+          printf 'versionName=%s\nversionCode=%s\ncommit=%s\n' "$APP_VERSION_NAME" "$APP_VERSION_CODE" "$GITHUB_SHA" > release-output/version.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thai-ocr-release-${{ env.APP_VERSION_NAME }}
+          path: release-output/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/thai-ocr-release.p12"
