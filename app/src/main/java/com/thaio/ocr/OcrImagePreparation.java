@@ -14,20 +14,21 @@ public final class OcrImagePreparation {
     public static Bitmap prepare(Bitmap source) {
         int width = source.getWidth(), height = source.getHeight();
         int[] row = new int[width];
-        int darkPixels = 0, samples = 0;
-        int step = Math.max(1, Math.max(width, height) / 300);
-        for (int y = 0; y < height; y += step) {
+        int edge = Math.max(1, Math.min(32, width / 20));
+        int[] darkCounts = new int[height];
+        for (int y = 0; y < height; y++) {
             source.getPixels(row, 0, width, 0, y, width, 1);
-            for (int x = 0; x < width; x += step) {
-                if (PixelPreparation.brightness(row[x]) < 96) darkPixels++;
-                samples++;
+            // Estimate paper color at the margins, not across dense bold letter strokes.
+            for (int x = 0; x < edge; x++) {
+                if (PixelPreparation.brightness(row[x]) < 96) darkCounts[y]++;
+                if (PixelPreparation.brightness(row[width - 1 - x]) < 96) darkCounts[y]++;
             }
         }
-        boolean dark = darkPixels > samples * .6;
+        boolean[] darkRows = PixelPreparation.darkRows(darkCounts, edge * 2, Math.max(2, height / 120));
         int[] histogram = new int[256];
         for (int y = 0; y < height; y++) {
             source.getPixels(row, 0, width, 0, y, width, 1);
-            for (int x = 0; x < width; x++) histogram[PixelPreparation.inkValue(row[x], dark)]++;
+            for (int x = 0; x < width; x++) histogram[PixelPreparation.inkValue(row[x], darkRows[y])]++;
         }
         // Full-image statistics avoid losing thin colored strokes between sampled pixels.
         int low = PixelPreparation.percentile(histogram, width * height, .01);
@@ -37,7 +38,7 @@ public final class OcrImagePreparation {
         result.eraseColor(Color.WHITE);
         for (int y = 0; y < height; y++) {
             source.getPixels(row, 0, width, 0, y, width, 1);
-            for (int x = 0; x < width; x++) row[x] = PixelPreparation.normalize(row[x], dark, low, high);
+            for (int x = 0; x < width; x++) row[x] = PixelPreparation.normalize(row[x], darkRows[y], low, high);
             result.setPixels(row, 0, width, border, border + y, width, 1);
         }
         return result;

@@ -3,6 +3,17 @@ package com.thaio.ocr;
 /** Pixel-only operations shared by Android and the desktop checks. */
 public final class PixelPreparation {
     private PixelPreparation() {}
+    /** Background polarity per horizontal band, so light and dark panels can coexist. */
+    public static boolean[] darkRows(int[] darkCounts, int samplesPerRow, int radius) {
+        boolean[] result = new boolean[darkCounts.length];
+        long[] prefix = new long[darkCounts.length + 1];
+        for (int i = 0; i < darkCounts.length; i++) prefix[i + 1] = prefix[i] + darkCounts[i];
+        for (int y = 0; y < result.length; y++) {
+            int top = Math.max(0, y - radius), bottom = Math.min(result.length, y + radius + 1);
+            result[y] = prefix[bottom] - prefix[top] > .6 * samplesPerRow * (bottom - top);
+        }
+        return result;
+    }
     public static int flatten(int color) {
         int alpha = color >>> 24;
         int r = (((color >> 16) & 255) * alpha + 255 * (255 - alpha)) / 255;
