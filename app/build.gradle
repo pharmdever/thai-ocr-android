@@ -6,8 +6,8 @@ android {
         applicationId 'com.thaio.ocr'
         minSdk 26
         targetSdk 35
-        versionCode (System.getenv('APP_VERSION_CODE') ?: '2').toInteger()
-        versionName System.getenv('APP_VERSION_NAME') ?: '0.2.0'
+        versionCode = (System.getenv('APP_VERSION_CODE') ?: '2').toInteger()
+        versionName = (System.getenv('APP_VERSION_NAME') ?: '0.2.0')
     }
     signingConfigs {
         release {
