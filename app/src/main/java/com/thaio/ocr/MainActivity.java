@@ -12,13 +12,21 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.BackgroundColorSpan;
 import android.view.View;
 import android.widget.*;
 import com.googlecode.tesseract.android.TessBaseAPI;
+import com.googlecode.tesseract.android.ResultIterator;
+import com.googlecode.tesseract.android.TessBaseAPI.PageIteratorLevel;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -27,12 +35,22 @@ public class MainActivity extends Activity {
     private TextView status;
     private ProgressBar progress;
     private Button choose, copy, save;
+    private Button retry;
+    private CheckBox detailed, enhance;
+    private Spinner language, layout;
+    private ImageView preview;
+    private Bitmap previewBitmap;
+    private Uri lastUri;
+    private int uncertainWords;
+    private int recognizedCharacters;
     private boolean busy;
     private String pendingExport = "";
     private static final int PICK = 10, SAVE = 11;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        getWindow().setStatusBarColor(Color.rgb(245, 248, 250));
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
@@ -51,6 +69,18 @@ public class MainActivity extends Activity {
         TextView subtitle = new TextView(this);
         subtitle.setText("แปลงภาพและ PDF เป็นข้อความ\nภาษาไทย + English • ใช้งานออฟไลน์");
         subtitle.setTextSize(16); body.addView(subtitle);
+        detailed = new CheckBox(this); detailed.setText("อ่านละเอียด (ช้ากว่า แต่ใช้ชุดภาษาคุณภาพสูง)");
+        detailed.setChecked(true); body.addView(detailed);
+        enhance = new CheckBox(this); enhance.setText("ปรับภาพอัตโนมัติ รวมถึงภาพพื้นดำ / ตัวอักษรสี");
+        enhance.setChecked(true); body.addView(enhance);
+        language = new Spinner(this);
+        language.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+            new String[]{"ภาษา: ไทย + English", "ภาษา: ไทย", "ภาษา: English"}));
+        body.addView(language);
+        layout = new Spinner(this);
+        layout.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+            new String[]{"รูปแบบ: อัตโนมัติ", "รูปแบบ: ข้อความกระจาย", "รูปแบบ: บรรทัดเดียว"}));
+        body.addView(layout);
         choose = button(body, "เลือกภาพหรือ PDF");
         choose.setOnClickListener(v -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -59,11 +89,23 @@ public class MainActivity extends Activity {
             intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/jpeg", "image/png", "application/pdf"});
             startActivityForResult(intent, PICK);
         });
+        retry = button(body, "อ่านไฟล์เดิมอีกครั้งด้วยตัวเลือกด้านบน");
+        retry.setEnabled(false);
+        retry.setOnClickListener(v -> { if (lastUri != null && !busy) startRecognition(lastUri); });
         status = new TextView(this);
         status.setText("เลือกไฟล์เพื่อเริ่ม • PDF สูงสุด 30 หน้า • ขนาดไม่เกิน 50 MB");
         status.setPadding(0, 16, 0, 16); body.addView(status);
         progress = new ProgressBar(this);
         progress.setVisibility(View.GONE); body.addView(progress);
+        TextView previewLabel = new TextView(this);
+        previewLabel.setText("ภาพต้นฉบับสำหรับตรวจเทียบ (PDF แสดงหน้าที่อ่านล่าสุด)");
+        body.addView(previewLabel);
+        preview = new ImageView(this); preview.setAdjustViewBounds(true);
+        preview.setMaxHeight((int)(230 * getResources().getDisplayMetrics().density));
+        preview.setContentDescription("ภาพต้นฉบับ"); body.addView(preview);
+        TextView confidenceNote = new TextView(this);
+        confidenceNote.setText("พื้นเหลือง = คำที่ระบบไม่มั่นใจ คำที่ไม่เป็นสีเหลืองก็อาจอ่านผิดได้");
+        confidenceNote.setTextSize(13); body.addView(confidenceNote);
         output = new EditText(this);
         output.setGravity(android.view.Gravity.TOP);
         output.setHint("ข้อความที่อ่านได้จะแสดงที่นี่ และแก้ไขได้");
@@ -96,10 +138,8 @@ public class MainActivity extends Activity {
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         if (request == PICK && !busy) {
-            busy = true; choose.setEnabled(false); save.setEnabled(false); copy.setEnabled(false);
-            output.setEnabled(false); progress.setVisibility(View.VISIBLE);
-            status.setText("กำลังเตรียมไฟล์และชุดภาษา…");
-            executor.execute(() -> recognize(uri));
+            lastUri = uri;
+            startRecognition(uri);
         } else if (request == SAVE) {
             try (OutputStream stream = getContentResolver().openOutputStream(uri, "wt")) {
                 if (stream == null) throw new IOException();
@@ -110,33 +150,52 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void startRecognition(Uri uri) {
+        boolean quality = detailed.isChecked(), prepare = enhance.isChecked();
+        String langs = new String[]{"tha+eng", "tha", "eng"}[language.getSelectedItemPosition()];
+        int pageMode = new int[]{TessBaseAPI.PageSegMode.PSM_AUTO,
+            TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT, TessBaseAPI.PageSegMode.PSM_SINGLE_LINE}[layout.getSelectedItemPosition()];
+        busy = true; choose.setEnabled(false); save.setEnabled(false); copy.setEnabled(false);
+        retry.setEnabled(false); detailed.setEnabled(false); enhance.setEnabled(false);
+        language.setEnabled(false); layout.setEnabled(false);
+        output.setEnabled(false); progress.setVisibility(View.VISIBLE);
+        status.setText("กำลังเตรียมไฟล์และชุดภาษา…");
+        executor.execute(() -> recognize(uri, quality, prepare, langs, pageMode));
+    }
+
     private void updateStatus(String text) {
         runOnUiThread(() -> { if (!closed) status.setText(text); });
     }
 
-    private void models() throws IOException {
-        File directory = new File(getFilesDir(), "tessdata");
+    private File models(boolean quality) throws IOException {
+        String model = quality ? "best" : "fast";
+        // A new directory prevents upgrades from silently reusing the previous fast models.
+        File root = new File(getFilesDir(), "models-v2/" + model);
+        File directory = new File(root, "tessdata");
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("สร้างพื้นที่ชุดภาษาไม่ได้");
         for (String language : new String[]{"tha", "eng"}) {
             File target = new File(directory, language + ".traineddata");
             if (target.isFile() && target.length() > 100000) continue;
             File temp = new File(directory, language + ".tmp");
-            try (InputStream source = getAssets().open("tessdata/" + language + ".traineddata");
+            try (InputStream source = getAssets().open("models/" + model + "/tessdata/" + language + ".traineddata");
                  OutputStream destination = new FileOutputStream(temp)) {
                 byte[] buffer = new byte[32768]; int n;
                 while ((n = source.read(buffer)) != -1) destination.write(buffer, 0, n);
             }
             if (!temp.renameTo(target)) throw new IOException("ติดตั้งชุดภาษาไม่สำเร็จ");
         }
+        return root;
     }
 
-    private void recognize(Uri uri) {
+    private void recognize(Uri uri, boolean quality, boolean prepare, String langs, int pageMode) {
         TessBaseAPI engine = new TessBaseAPI();
         File temp = null;
         try {
-            models();
-            if (!engine.init(getFilesDir().getAbsolutePath(), "tha+eng", TessBaseAPI.OEM_LSTM_ONLY))
+            uncertainWords = 0; recognizedCharacters = 0;
+            File modelRoot = models(quality);
+            if (!engine.init(modelRoot.getAbsolutePath(), langs, TessBaseAPI.OEM_LSTM_ONLY))
                 throw new IOException("เปิดระบบ OCR ไม่สำเร็จ");
+            engine.setPageSegMode(pageMode);
             temp = File.createTempFile("document-", ".bin", getCacheDir());
             try (InputStream input = getContentResolver().openInputStream(uri);
                  OutputStream file = new FileOutputStream(temp)) {
@@ -154,7 +213,7 @@ public class MainActivity extends Activity {
                 byte[] magic = new byte[5];
                 pdf = header.read(magic) == 5 && new String(magic, StandardCharsets.US_ASCII).equals("%PDF-");
             }
-            StringBuilder text = new StringBuilder();
+            SpannableStringBuilder text = new SpannableStringBuilder();
             if (pdf) {
                 try (ParcelFileDescriptor fd = ParcelFileDescriptor.open(temp, ParcelFileDescriptor.MODE_READ_ONLY);
                      PdfRenderer renderer = new PdfRenderer(fd)) {
@@ -164,13 +223,13 @@ public class MainActivity extends Activity {
                         if (closed) return;
                         updateStatus("กำลังอ่านหน้า " + (i + 1) + " / " + count);
                         try (PdfRenderer.Page page = renderer.openPage(i)) {
-                            float scale = Math.min(3f, 2400f / Math.max(page.getWidth(), page.getHeight()));
+                            float scale = Math.min(4f, (quality ? 3000f : 2400f) / Math.max(page.getWidth(), page.getHeight()));
                             Bitmap bitmap = Bitmap.createBitmap(Math.max(1, (int)(page.getWidth() * scale)),
                                 Math.max(1, (int)(page.getHeight() * scale)), Bitmap.Config.ARGB_8888);
                             try {
                                 bitmap.eraseColor(Color.WHITE);
                                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                                text.append("--- หน้า ").append(i + 1).append(" ---\n").append(read(engine, bitmap)).append("\n\n");
+                                text.append("--- หน้า ").append(String.valueOf(i + 1)).append(" ---\n").append(read(engine, bitmap, prepare)).append("\n\n");
                             } finally { bitmap.recycle(); }
                         }
                     }
@@ -181,17 +240,20 @@ public class MainActivity extends Activity {
                 BitmapFactory.decodeFile(temp.getPath(), options);
                 if (options.outWidth <= 0) throw new IOException("รองรับเฉพาะภาพ JPG, PNG และ PDF ที่ไม่ล็อกรหัสผ่าน");
                 options.inSampleSize = 1;
-                while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > 2400) options.inSampleSize *= 2;
+                while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > (quality ? 3200 : 2400)) options.inSampleSize *= 2;
                 options.inJustDecodeBounds = false;
                 Bitmap bitmap = BitmapFactory.decodeFile(temp.getPath(), options);
                 if (bitmap == null) throw new IOException("อ่านรูปไม่ได้");
-                try { text.append(read(engine, bitmap)); } finally { bitmap.recycle(); }
+                Bitmap oriented = OcrImagePreparation.orient(bitmap, temp);
+                if (oriented != bitmap) bitmap.recycle();
+                try { text.append(read(engine, oriented, prepare)); } finally { oriented.recycle(); }
             }
-            String result = text.toString().trim();
+            CharSequence result = text;
             runOnUiThread(() -> {
                 if (closed) return;
                 output.setText(result);
-                status.setText(result.isEmpty() ? "ไม่พบข้อความ ลองใช้ภาพที่ชัดและวางตรง" : "อ่านเสร็จแล้ว ตรวจและแก้ไขข้อความได้ด้านล่าง");
+                status.setText(recognizedCharacters == 0 ? "ไม่พบข้อความ ลองใช้ภาพที่ชัดและวางตรง" :
+                    "อ่านเสร็จแล้ว • พบคำที่ควรตรวจ " + uncertainWords + " จุด • โปรดตรวจชื่อและตัวเลขกับต้นฉบับ");
             });
         } catch (Exception | OutOfMemoryError e) {
             updateStatus("อ่านไม่สำเร็จ: " + (e instanceof OutOfMemoryError ? "หน่วยความจำไม่พอ ลองไฟล์เล็กลง" :
@@ -204,17 +266,73 @@ public class MainActivity extends Activity {
                 if (!closed) {
                     choose.setEnabled(true); save.setEnabled(true); copy.setEnabled(true);
                     output.setEnabled(true); progress.setVisibility(View.GONE);
+                    retry.setEnabled(lastUri != null); detailed.setEnabled(true); enhance.setEnabled(true);
+                    language.setEnabled(true); layout.setEnabled(true);
                 }
             });
         }
     }
 
-    private String read(TessBaseAPI engine, Bitmap bitmap) {
-        engine.setImage(bitmap);
-        String text = engine.getUTF8Text(); engine.clear(); return text == null ? "" : text;
+    private CharSequence read(TessBaseAPI engine, Bitmap bitmap, boolean prepare) {
+        if (closed) return "";
+        showPreview(bitmap);
+        Bitmap processed = prepare ? OcrImagePreparation.prepare(bitmap) : bitmap;
+        try {
+            engine.setImage(processed);
+            String text = engine.getUTF8Text();
+            if (text == null) text = "";
+            recognizedCharacters += text.trim().length();
+            SpannableString marked = new SpannableString(text);
+            ResultIterator iterator = engine.getResultIterator();
+            if (iterator != null) {
+                try {
+                    iterator.begin(); int cursor = 0;
+                    do {
+                        String word = iterator.getUTF8Text(PageIteratorLevel.RIL_WORD);
+                        if (word == null || word.trim().isEmpty()) continue;
+                        word = word.trim();
+                        int index = text.indexOf(word, cursor);
+                        if (index < 0) continue;
+                        if (iterator.confidence(PageIteratorLevel.RIL_WORD) < 75) {
+                            marked.setSpan(new BackgroundColorSpan(0xffffe59a), index, index + word.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                            uncertainWords++;
+                        }
+                        cursor = index + word.length();
+                    } while (iterator.next(PageIteratorLevel.RIL_WORD));
+                } finally { iterator.delete(); }
+            }
+            // Script changes after a digit and split hyphenated numbers can have misleadingly
+            // high OCR confidence. Flag them for review without rewriting any values.
+            Matcher suspicious = Pattern.compile("[0-9]+[\\u0E00-\\u0E7F]+|[0-9]+(?:-[0-9]+)+[ \\t]+[0-9]+(?:-[0-9]+)*").matcher(text);
+            while (suspicious.find()) {
+                marked.setSpan(new BackgroundColorSpan(0xffffe59a), suspicious.start(), suspicious.end(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                uncertainWords++;
+            }
+            return marked;
+        } finally {
+            engine.clear();
+            if (processed != bitmap) processed.recycle();
+        }
+    }
+
+    private void showPreview(Bitmap source) {
+        float ratio = Math.min(1f, 900f / Math.max(source.getWidth(), source.getHeight()));
+        Bitmap small = Bitmap.createScaledBitmap(source, Math.max(1, (int)(source.getWidth() * ratio)),
+            Math.max(1, (int)(source.getHeight() * ratio)), true);
+        // createScaledBitmap can return the source; never let the UI own the OCR bitmap.
+        Bitmap thumbnail = small == source ? source.copy(Bitmap.Config.ARGB_8888, false) : small;
+        runOnUiThread(() -> {
+            if (closed) { thumbnail.recycle(); return; }
+            Bitmap previous = previewBitmap;
+            previewBitmap = thumbnail; preview.setImageBitmap(thumbnail);
+            if (previous != null) previous.recycle();
+        });
     }
 
     @Override protected void onDestroy() {
-        closed = true; executor.shutdown(); super.onDestroy();
+        closed = true; executor.shutdown();
+        preview.setImageDrawable(null);
+        if (previewBitmap != null) { previewBitmap.recycle(); previewBitmap = null; }
+        super.onDestroy();
     }
 }

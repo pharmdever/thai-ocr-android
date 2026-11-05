@@ -9,4 +9,5 @@ local.properties
 *KEYSTORE*.txt
 keystore-password.txt
 app/src/main/assets/tessdata/*.traineddata
+app/src/main/assets/models/**/*.traineddata
 *.zip
