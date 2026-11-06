@@ -43,8 +43,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            trap 'mkdir -p ui-screenshots; adb pull /sdcard/Android/data/com.thaio.ocr/files/screenshots/. ui-screenshots/ || true' EXIT
             gradle --no-daemon connectedDebugAndroidTest
+            mkdir -p ui-screenshots
+            adb pull /sdcard/Android/data/com.thaio.ocr/files/screenshots/. ui-screenshots/
       - uses: actions/upload-artifact@v4
         if: always()
         with:
