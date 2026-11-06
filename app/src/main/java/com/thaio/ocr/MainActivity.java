@@ -101,8 +101,8 @@ public class MainActivity extends Activity {
         });
         setContentView(root);
         LinearLayout header = row(this); header.setPadding(dp(this,20),dp(this,18),dp(this,20),dp(this,12));
-        ImageView logo = new ImageView(this); logo.setImageResource(R.drawable.ic_scan); logo.setImageTintList(android.content.res.ColorStateList.valueOf(Color.WHITE));
-        logo.setPadding(dp(this,12),dp(this,12),dp(this,12),dp(this,12)); logo.setBackground(rounded(this,TEAL,15,0));
+        ImageView logo = new ImageView(this); logo.setImageResource(R.mipmap.ic_launcher);
+        logo.setContentDescription("ไอคอนอ่านดี เอกสารในกรอบสแกน");
         header.addView(logo,new LinearLayout.LayoutParams(dp(this,48),dp(this,48)));
         LinearLayout brand = column(this); brand.setPadding(dp(this,12),0,0,0);
         brand.addView(text(this,"อ่านดี",24,INK,true)); brand.addView(text(this,"OCR ภาษาไทยและอังกฤษ",12,MUTED,false));
