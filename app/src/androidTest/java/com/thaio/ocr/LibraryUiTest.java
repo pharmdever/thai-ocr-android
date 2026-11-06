@@ -4,6 +4,10 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ContentValues;
+import android.provider.MediaStore;
+import android.net.Uri;
+import android.os.Build;
 import android.graphics.Bitmap;
 import android.view.View;
 import android.widget.EditText;
@@ -32,6 +36,13 @@ public class LibraryUiTest {
     private void screenshot(Context c,String name) throws Exception {
         instrument.waitForIdleSync(); Thread.sleep(400);
         Bitmap bitmap=instrument.getUiAutomation().takeScreenshot(); assertNotNull(bitmap);
+        if(Build.VERSION.SDK_INT>=29) {
+            ContentValues values=new ContentValues(); values.put(MediaStore.Images.Media.DISPLAY_NAME,name+".png");
+            values.put(MediaStore.Images.Media.MIME_TYPE,"image/png"); values.put(MediaStore.Images.Media.RELATIVE_PATH,"Pictures/read-dee-ui");
+            Uri uri=c.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values); assertNotNull(uri);
+            try(java.io.OutputStream out=c.getContentResolver().openOutputStream(uri)) { assertNotNull(out); bitmap.compress(Bitmap.CompressFormat.PNG,100,out); }
+            bitmap.recycle(); return;
+        }
         File folder=c.getExternalFilesDir("screenshots"); assertNotNull(folder); folder.mkdirs();
         try(FileOutputStream out=new FileOutputStream(new File(folder,name+".png"))) { bitmap.compress(Bitmap.CompressFormat.PNG,100,out); }
         bitmap.recycle();

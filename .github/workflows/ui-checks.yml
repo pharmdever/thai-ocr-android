@@ -45,7 +45,7 @@ jobs:
           script: |
             gradle --no-daemon connectedDebugAndroidTest
             mkdir -p ui-screenshots
-            adb pull /sdcard/Android/data/com.thaio.ocr/files/screenshots/. ui-screenshots/
+            adb pull /sdcard/Pictures/read-dee-ui/. ui-screenshots/
       - uses: actions/upload-artifact@v4
         if: always()
         with:
