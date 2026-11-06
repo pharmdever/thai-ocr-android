@@ -1,0 +1,9 @@
+<resources>
+    <item name="nav_read" type="id" />
+    <item name="nav_library" type="id" />
+    <item name="note_body" type="id" />
+    <item name="note_title" type="id" />
+    <item name="save_note" type="id" />
+    <item name="library_search" type="id" />
+    <item name="library_list" type="id" />
+</resources>
